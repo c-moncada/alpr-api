@@ -1,0 +1,21 @@
+# Blueprint de Render: New -> Blueprint y elige este repo.
+services:
+  - type: web
+    name: alpr-api
+    runtime: docker
+    plan: free
+    # La más cercana a Centroamérica
+    region: virginia
+    healthCheckPath: /health
+    envVars:
+      # Render genera un valor aleatorio; lo copias desde Environment
+      - key: API_KEY
+        generateValue: true
+      # Cuando tengas el frontend publicado, pon aquí su dominio
+      - key: CORS_ORIGENES
+        value: "*"
+      - key: GROQ_HABILITADO
+        value: "false"
+      # Render la pide al crear el Blueprint; déjala vacía si no usas Groq
+      - key: GROQ_API_KEY
+        sync: false

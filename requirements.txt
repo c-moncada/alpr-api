@@ -1,0 +1,21 @@
+# ---- núcleo ALPR (local, sin API) ----
+# Trae open-image-models (detector YOLOv9), fast-plate-ocr, onnxruntime y opencv
+fast-alpr[onnx]==0.4.0
+
+# ---- API ----
+fastapi==0.141.1
+uvicorn[standard]==0.46.0
+python-multipart==0.0.26
+pydantic==2.13.3
+pydantic-settings==2.14.0
+
+# ---- fallback opcional a Groq ----
+httpx==0.28.1
+
+# Versiones que instala fast-alpr como dependencia (no hace falta pinnearlas):
+#   fast-plate-ocr 1.1.0, open-image-models 0.6.0, onnxruntime 1.25.0, opencv 4.13.0
+#
+# Si tienes GPU NVIDIA con CUDA, cambia la primera línea por:
+#   fast-alpr[onnx-gpu]==0.4.0
+# En Windows sin CUDA, DirectML usa la GPU integrada o la dedicada vía DirectX:
+#   fast-alpr[onnx-directml]==0.4.0
