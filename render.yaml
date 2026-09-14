@@ -20,8 +20,12 @@ services:
       - key: GROQ_API_KEY
         sync: false
       # Vigilancia de Google Drive. El webhook usa RENDER_EXTERNAL_URL solo.
+      # Las tres van con sync: false para que el Blueprint no pise lo que se
+      # ponga en el panel (el código ya trae DRIVE_HABILITADO=false por default).
+      # En un Blueprint que ya existe Render las ignora: se agregan a mano en
+      # Environment.
       - key: DRIVE_HABILITADO
-        value: "false"
+        sync: false
       - key: DRIVE_CARPETA_ID
         sync: false
       # El JSON completo de la service account
