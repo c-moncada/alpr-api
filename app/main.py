@@ -199,7 +199,7 @@ def drive_webhook(
     aviso por fallido si tardas.
     """
     if not settings.drive_activo or not x_goog_channel_token or not secrets.compare_digest(
-        x_goog_channel_token.encode(), drive_service.TOKEN_CANAL.encode()
+        x_goog_channel_token.encode(), drive_service.token_canal().encode()
     ):
         return Response(status_code=403)
     if x_goog_resource_state != "sync":  # "sync" solo confirma que el canal quedó creado
