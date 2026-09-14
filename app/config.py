@@ -6,8 +6,10 @@ en Render se ajusta desde el panel sin tocar una sola línea de código.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Raíz del proyecto (carpeta que contiene app/)
@@ -81,6 +83,13 @@ class Settings(BaseSettings):
     render_external_url: str = ""
     # Cada cuántos segundos se escanea la carpeta aunque no llegue ningún aviso
     drive_intervalo_revision: int = 600
+
+    @field_validator("drive_carpeta_id")
+    @classmethod
+    def _id_de_carpeta(cls, valor: str) -> str:
+        """Acepta el ID o la URL completa de la carpeta, que es lo que se suele pegar."""
+        m = re.search(r"/folders/([A-Za-z0-9_-]+)|[?&]id=([A-Za-z0-9_-]+)", valor)
+        return (m.group(1) or m.group(2)) if m else valor.strip()
 
     @property
     def groq_activo(self) -> bool:
