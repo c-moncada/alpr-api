@@ -266,7 +266,9 @@ webhook, `Canal de Drive activo hasta ...`.
 | `muy_grande` | Pesa más de `MAX_MB_IMAGEN` |
 | `error` | Falló el pipeline; el detalle va en `nota` |
 
-Una foto se procesa una sola vez. Para volver a leerla, súbela de nuevo.
+Cada foto se lee una sola vez. Si la reemplazas (subir otra con el mismo
+nombre y elegir *Reemplazar*), Drive guarda una versión nueva del mismo
+archivo: la API lo nota porque cambia el MD5 del contenido y la vuelve a leer.
 
 ### Desde React Native
 

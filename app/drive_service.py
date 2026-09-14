@@ -21,9 +21,9 @@ caduque (Google lo cierra a los 7 días como máximo).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
-import secrets
 import threading
 import time
 import uuid
@@ -47,9 +47,21 @@ DURACION_CANAL = 7 * 24 * 3600
 # Se renueva cuando le queda menos de esto
 MARGEN_RENOVACION = 24 * 3600
 
-# Google devuelve este valor en cada aviso: así se descartan POST ajenos y los
-# de canales creados antes de un reinicio. Cambia en cada arranque a propósito.
-TOKEN_CANAL = secrets.token_urlsafe(32)
+# Todo lo que se escribe en cada foto. Al guardar un resultado se mandan
+# todas: las que quedan en None se borran, así no sobreviven datos de una
+# versión anterior de la misma foto (ej. la placa vieja en una foto sin placa).
+CLAVES_RESULTADO = (
+    "alpr_estado",
+    "alpr_placa",
+    "alpr_fuente",
+    "alpr_conf_det",
+    "alpr_conf_ocr",
+    "alpr_bbox",
+    "alpr_n_placas",
+    "alpr_nota",
+    "alpr_procesado",
+    "alpr_md5",
+)
 
 _estado: dict = {
     "canal_expira": 0.0,
@@ -58,6 +70,7 @@ _estado: dict = {
 }
 
 _credenciales = None
+_token_canal: str | None = None
 # El cliente de googleapiclient no es seguro entre hilos (usa httplib2), y
 # aquí se llama desde el threadpool de FastAPI y desde asyncio.to_thread.
 _local = threading.local()
@@ -87,6 +100,23 @@ def _drive():
     if not hasattr(_local, "drive"):
         _local.drive = build("drive", "v3", credentials=_obtener_credenciales(), cache_discovery=False)
     return _local.drive
+
+
+def token_canal() -> str:
+    """Secreto que Google devuelve en cada aviso; así se descartan POST ajenos.
+
+    Se deriva firmando un texto fijo con la clave de la service account (la
+    firma RSA PKCS#1 v1.5 es determinista): da el mismo valor en cada arranque
+    y en cada instancia sin guardarlo en ningún lado, y sin la clave nadie
+    puede calcularlo. Si fuera aleatorio, durante un despliegue de Render los
+    avisos que llegan a la instancia vieja (sigue viva unos segundos, con
+    otro token) se rechazarían y la foto esperaría a la revisión periódica.
+    """
+    global _token_canal
+    if _token_canal is None:
+        texto = f"alpr-api/drive-webhook/{settings.drive_carpeta_id}".encode()
+        _token_canal = hashlib.sha256(_obtener_credenciales().sign_bytes(texto)).hexdigest()
+    return _token_canal
 
 
 def _query_carpeta() -> str:
@@ -129,7 +159,7 @@ def asegurar_canal() -> None:
                 "id": str(uuid.uuid4()),
                 "type": "web_hook",
                 "address": url,
-                "token": TOKEN_CANAL,
+                "token": token_canal(),
                 "expiration": int((time.time() + DURACION_CANAL) * 1000),
             },
         )
@@ -207,7 +237,7 @@ def _fotos_pendientes() -> list[dict]:
             .files()
             .list(
                 q=_query_carpeta(),
-                fields="nextPageToken, files(id, name, size, appProperties)",
+                fields="nextPageToken, files(id, name, size, md5Checksum, appProperties)",
                 orderBy="createdTime",
                 pageSize=1000,
                 pageToken=token,
@@ -216,10 +246,21 @@ def _fotos_pendientes() -> list[dict]:
             )
             .execute()
         )
-        pendientes += [f for f in r.get("files", []) if "alpr_estado" not in f.get("appProperties", {})]
+        pendientes += [f for f in r.get("files", []) if _pendiente_de_leer(f)]
         token = r.get("nextPageToken")
         if not token:
             return pendientes
+
+
+def _pendiente_de_leer(archivo: dict) -> bool:
+    """Sin resultado, o con el resultado de otra versión de la foto.
+
+    Si subes una foto con el mismo nombre y eliges reemplazar, Drive guarda
+    una versión nueva del MISMO archivo: mismo ID y mismas appProperties.
+    Por eso se compara el MD5 del contenido y no solo si ya hay estado.
+    """
+    props = archivo.get("appProperties", {})
+    return "alpr_estado" not in props or props.get("alpr_md5") != archivo.get("md5Checksum")
 
 
 def _escanear_una_vez() -> int:
@@ -241,6 +282,8 @@ def _escanear_una_vez() -> int:
             props = {"alpr_estado": "error", "alpr_nota": type(e).__name__}
 
         props["alpr_procesado"] = _ahora()
+        props["alpr_md5"] = archivo.get("md5Checksum")
+        props = {k: props.get(k) for k in CLAVES_RESULTADO}
         try:
             _drive().files().update(
                 fileId=archivo["id"], body={"appProperties": props}, fields="id", supportsAllDrives=True
@@ -252,7 +295,7 @@ def _escanear_una_vez() -> int:
                 ) from e
             raise
         procesadas += 1
-        log.info("Drive: %s -> %s %s", archivo["name"], props["alpr_estado"], props.get("alpr_placa", ""))
+        log.info("Drive: %s -> %s %s", archivo["name"], props["alpr_estado"], props["alpr_placa"] or "")
     return procesadas
 
 
