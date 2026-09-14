@@ -89,6 +89,12 @@ if (placas.length) {
 }
 ```
 
+### Probar desde el navegador
+
+Abre [`probar.html`](probar.html) con doble clic: pegas la API key, eliges una
+foto y te muestra el texto de la placa y el recorte ya como imagen. Swagger
+(`/docs`) también sirve, pero ahí el recorte llega como texto base64.
+
 ### Errores
 
 | Código | Cuándo |
@@ -272,6 +278,7 @@ alpr_api/
 │   └── test_alpr.py           Corre el pipeline sin HTTP, para medir precisión
 ├── Dockerfile
 ├── render.yaml            Blueprint de Render
+├── probar.html            Página para probar /detect desde el navegador
 ├── .env.example
 └── requirements.txt
 ```

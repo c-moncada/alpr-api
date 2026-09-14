@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Probar API de placas</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1a1d21; --muted: #5f6670; --border: #dde1e6;
+    --accent: #2f6fed; --ok: #1f8f4e; --warn: #a86a12; --err: #c53030;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --card: #1a1e24; --text: #e8eaed; --muted: #9aa1ab; --border: #2c323a;
+      --accent: #6d9cff; --ok: #4cc27f; --warn: #e0a64a; --err: #f07171;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .92em; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+  .field { margin-bottom: 16px; }
+  label, .label { display: block; font-weight: 600; margin: 0 0 6px; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--bg); color: var(--text); font: inherit;
+  }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .drop { border: 2px dashed var(--border); border-radius: 10px; padding: 20px; text-align: center; cursor: pointer; color: var(--muted); }
+  .drop.over, .drop:focus-visible { border-color: var(--accent); outline: none; }
+  .drop img { max-width: 100%; max-height: 260px; border-radius: 6px; display: block; margin: 0 auto 8px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 7px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .estado { margin: 12px 0 0; color: var(--muted); min-height: 1.5em; }
+  .estado.error { color: var(--err); }
+  .placa { display: grid; gap: 12px; justify-items: start; }
+  .texto { font: 700 34px/1.1 ui-monospace, "Cascadia Mono", Consolas, monospace; letter-spacing: 2px; }
+  .recorte { width: 100%; max-width: 420px; height: auto; border: 1px solid var(--border); border-radius: 6px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 20px; color: var(--muted); font-size: 13px; }
+  .fuente { font-weight: 600; }
+  .fuente.local, .fuente.local_confirmado { color: var(--ok); }
+  .fuente.groq, .fuente.local_baja_confianza { color: var(--warn); }
+  pre { overflow-x: auto; background: var(--bg); padding: 12px; border-radius: 7px; font-size: 12px; margin: 8px 0 0; }
+  summary { cursor: pointer; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Probar API de placas</h1>
+  <p class="sub">Sube la foto de un vehículo y mira el texto y el recorte que devuelve <code>POST /detect</code>.</p>
+
+  <div class="card">
+    <div class="field">
+      <label for="url">URL de la API</label>
+      <input id="url" type="text" value="https://alpr-api-9w5h.onrender.com" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="key">API key</label>
+      <input id="key" type="password" placeholder="Pega aquí el valor de API_KEY" autocomplete="off">
+      <div class="hint">En Render: servicio alpr-api → Environment → API_KEY. Déjala vacía si la API no pide key (en local).</div>
+    </div>
+    <div class="field">
+      <span class="label">Foto</span>
+      <div id="drop" class="drop" tabindex="0" role="button" aria-label="Elegir foto">
+        <img id="preview" hidden alt="">
+        <span id="dropTexto">Haz clic o arrastra una imagen aquí</span>
+      </div>
+      <input id="archivo" type="file" accept="image/*" hidden>
+    </div>
+    <button id="enviar" disabled>Detectar placa</button>
+    <p id="estado" class="estado" aria-live="polite"></p>
+  </div>
+
+  <div id="resultados"></div>
+
+  <details id="crudo" class="card" hidden>
+    <summary>Respuesta JSON</summary>
+    <pre id="json"></pre>
+  </details>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let archivo = null;
+
+function elegir(f) {
+  if (!f) return;
+  archivo = f;
+  $("preview").src = URL.createObjectURL(f);
+  $("preview").hidden = false;
+  $("dropTexto").textContent = f.name + " · clic para cambiarla";
+  $("enviar").disabled = false;
+}
+
+$("drop").addEventListener("click", () => $("archivo").click());
+$("drop").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("archivo").click(); }
+});
+$("archivo").addEventListener("change", (e) => elegir(e.target.files[0]));
+$("drop").addEventListener("dragover", (e) => { e.preventDefault(); $("drop").classList.add("over"); });
+$("drop").addEventListener("dragleave", () => $("drop").classList.remove("over"));
+$("drop").addEventListener("drop", (e) => {
+  e.preventDefault();
+  $("drop").classList.remove("over");
+  elegir(e.dataTransfer.files[0]);
+});
+
+function estado(texto, error = false) {
+  $("estado").textContent = texto;
+  $("estado").classList.toggle("error", error);
+}
+
+$("enviar").addEventListener("click", async () => {
+  const url = $("url").value.trim().replace(/\/+$/, "");
+  const key = $("key").value.trim();
+  const form = new FormData();
+  form.append("archivo", archivo);
+
+  $("enviar").disabled = true;
+  $("resultados").replaceChildren();
+  $("crudo").hidden = true;
+  estado("Procesando… si el servicio estaba dormido, la primera vez tarda cerca de un minuto.");
+  const t0 = performance.now();
+
+  try {
+    const r = await fetch(url + "/detect", {
+      method: "POST",
+      headers: key ? { "X-API-Key": key } : {},
+      body: form,
+    });
+    const segundos = ((performance.now() - t0) / 1000).toFixed(1);
+    const datos = await r.json().catch(() => null);
+
+    if (!r.ok) {
+      const detalle = datos && datos.detail
+        ? (typeof datos.detail === "string" ? datos.detail : JSON.stringify(datos.detail))
+        : r.statusText;
+      const pistas = { 401: " Revisa la API key.", 413: " La imagen es demasiado grande.", 400: " ¿Seguro que es una imagen?" };
+      estado(`Error ${r.status}: ${detalle}.${pistas[r.status] || ""}`, true);
+      return;
+    }
+
+    mostrar(datos);
+    estado(`Listo en ${segundos} s (procesamiento en el servidor: ${datos.ms_procesamiento} ms).`);
+  } catch (e) {
+    estado(`No se pudo conectar con ${url}. Revisa la URL. (${e.message})`, true);
+  } finally {
+    $("enviar").disabled = false;
+  }
+});
+
+function mostrar(datos) {
+  const cont = $("resultados");
+  if (!datos.placas.length) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.textContent = "No se encontró ninguna placa en la foto.";
+    cont.append(card);
+  }
+
+  for (const p of datos.placas) {
+    const card = document.createElement("div");
+    card.className = "card placa";
+
+    const texto = document.createElement("div");
+    texto.className = "texto";
+    texto.textContent = p.texto || "(sin texto)";
+
+    const img = document.createElement("img");
+    img.className = "recorte";
+    img.alt = "Recorte de la placa";
+    img.src = "data:image/jpeg;base64," + p.imagen_base64;
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const fuente = document.createElement("span");
+    fuente.className = "fuente " + p.fuente;
+    fuente.textContent = p.fuente;
+    meta.append(fuente);
+    const items = [
+      ["Confianza OCR", p.confianza_ocr != null ? p.confianza_ocr.toFixed(4) : "—"],
+      ["Confianza detección", p.confianza_deteccion.toFixed(4)],
+    ];
+    if (p.nota_fallback) items.push(["Nota", p.nota_fallback]);
+    for (const [k, v] of items) {
+      const s = document.createElement("span");
+      s.textContent = `${k}: ${v}`;
+      meta.append(s);
+    }
+
+    card.append(texto, img, meta);
+    cont.append(card);
+  }
+
+  // JSON crudo, con el base64 recortado para que se pueda leer
+  const copia = structuredClone(datos);
+  for (const p of copia.placas) {
+    p.imagen_base64 = p.imagen_base64.slice(0, 40) + `… (${p.imagen_base64.length} caracteres)`;
+  }
+  $("json").textContent = JSON.stringify(copia, null, 2);
+  $("crudo").hidden = false;
+}
+</script>
+</body>
+</html>
