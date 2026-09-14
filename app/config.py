@@ -65,10 +65,39 @@ class Settings(BaseSettings):
     groq_timeout: float = 8.0
     groq_base_url: str = "https://api.groq.com/openai/v1/chat/completions"
 
+    # ---------------------------------------------------- Google Drive (opcional)
+    # Vigila una carpeta y lee las placas de cada foto nueva (ver drive_service.py)
+    drive_habilitado: bool = False
+    # Lo que va después de /folders/ en la URL de la carpeta
+    drive_carpeta_id: str = ""
+    # Credenciales de la service account: el JSON completo pegado en una
+    # variable (cómodo en Render) o la ruta al archivo (cómodo en local).
+    google_service_account_json: str = ""
+    google_service_account_file: str = ""
+    # URL pública HTTPS de esta API, sin ruta. Google manda los avisos a
+    # {url_publica}/drive/webhook. En Render se toma sola de RENDER_EXTERNAL_URL.
+    # Si no hay ninguna, no se registra el webhook y queda solo la revisión periódica.
+    url_publica: str = ""
+    render_external_url: str = ""
+    # Cada cuántos segundos se escanea la carpeta aunque no llegue ningún aviso
+    drive_intervalo_revision: int = 600
+
     @property
     def groq_activo(self) -> bool:
         """Groq solo se usa si está habilitado Y hay API key."""
         return self.groq_habilitado and bool(self.groq_api_key.strip())
+
+    @property
+    def drive_activo(self) -> bool:
+        """Drive solo se vigila si está habilitado, hay carpeta y hay credenciales."""
+        credenciales = self.google_service_account_json.strip() or self.google_service_account_file.strip()
+        return self.drive_habilitado and bool(self.drive_carpeta_id.strip()) and bool(credenciales)
+
+    @property
+    def drive_webhook_url(self) -> str | None:
+        """URL que se registra en Google. None si no hay una URL HTTPS pública."""
+        base = (self.url_publica or self.render_external_url).strip().rstrip("/")
+        return f"{base}/drive/webhook" if base.startswith("https://") else None
 
     @property
     def lista_cors(self) -> list[str]:

@@ -19,3 +19,11 @@ services:
       # Render la pide al crear el Blueprint; déjala vacía si no usas Groq
       - key: GROQ_API_KEY
         sync: false
+      # Vigilancia de Google Drive. El webhook usa RENDER_EXTERNAL_URL solo.
+      - key: DRIVE_HABILITADO
+        value: "false"
+      - key: DRIVE_CARPETA_ID
+        sync: false
+      # El JSON completo de la service account
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false

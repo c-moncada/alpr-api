@@ -110,6 +110,14 @@ foto y te muestra el texto de la placa y el recorte ya como imagen. Swagger
 |---|---|---|
 | `GET` | `/health` | Estado del servicio. Render lo usa como health check; no pide API key. |
 | `POST` | `/detect` | Imagen → texto y recorte de cada placa |
+| `GET` | `/drive/lecturas` | Fotos recientes de la carpeta de Drive con su placa (`?placa=HAB1234` para buscar) |
+| `GET` | `/drive/lecturas/{drive_id}/recorte` | Recorte JPEG de la placa de una foto de Drive |
+| `POST` | `/drive/escanear` | Revisa la carpeta ya, sin esperar el aviso de Google |
+| `GET` | `/drive/estado` | Canal de avisos, último escaneo y último error |
+| `POST` | `/drive/webhook` | Lo llama Google, no tú. Valida un token propio en vez de la API key. |
+
+Los `/drive/*` responden `503` si la vigilancia de Drive no está configurada
+(ver [Vigilar una carpeta de Google Drive](#vigilar-una-carpeta-de-google-drive)).
 
 Swagger en `/docs`; el botón **Authorize** es para poner la API key.
 
@@ -179,6 +187,104 @@ build si los modelos no quedaron en caché: un deploy roto no llega a producció
 - **`CORS_ORIGENES`**: qué dominios pueden llamar a la API desde un navegador,
   separados por coma (ej. `https://miapp.com`). El default `*` acepta
   cualquiera; cuando tengas el frontend publicado, pon su dominio.
+
+---
+
+## Vigilar una carpeta de Google Drive
+
+Opcional y apagado por default. Subes fotos a una carpeta de Drive, la API
+se entera sola y lee la placa de cada una:
+
+```
+foto nueva en Drive ──aviso──▶ POST /drive/webhook ──▶ escanea la carpeta
+                                                              │
+      React Native ◀── GET /drive/lecturas ◀── placa guardada en la foto
+```
+
+**El aviso de Google no dice qué archivo cambió**, solo que algo cambió. Cada
+aviso dispara un escaneo que procesa las fotos de la carpeta que todavía no
+tienen resultado.
+
+**El resultado se guarda en la propia foto**, como `appProperties`: metadatos
+privados de esta app que el usuario no ve en Drive. Por eso la API sigue sin
+base de datos ni disco: si Render reinicia o duerme el contenedor, al
+arrancar escanea la carpeta y retoma donde se quedó.
+
+Por cada foto se guarda la placa más clara (`placas[0]`), su bbox y cuántas
+placas había. El recorte no se guarda: `/drive/lecturas/{id}/recorte` lo
+vuelve a cortar de la foto original con el bbox, sin correr otra vez el modelo.
+
+### Configuración
+
+1. En [Google Cloud Console](https://console.cloud.google.com): crea un
+   proyecto, habilita **Google Drive API** y crea una **service account**. En
+   su pestaña *Keys* → *Add key* → *JSON*, descarga el archivo.
+2. En Drive, **comparte la carpeta con el email de la service account**
+   (`...@....iam.gserviceaccount.com`) **como Editor**. Lector no alcanza: la
+   API escribe el resultado en cada foto.
+3. Variables de entorno:
+
+   ```ini
+   DRIVE_HABILITADO=true
+   DRIVE_CARPETA_ID=1AbC...        # lo que va después de /folders/ en la URL
+   # local: el archivo JSON junto al proyecto (ya está en .gitignore)
+   GOOGLE_SERVICE_ACCOUNT_FILE=service-account.json
+   # Render: el JSON completo en una sola variable
+   GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+   ```
+
+4. **El webhook necesita una URL HTTPS pública.** En Render se toma sola de
+   `RENDER_EXTERNAL_URL`. En local, levanta un túnel (`ngrok http 8000`) y
+   pon `URL_PUBLICA=https://xxxx.ngrok-free.app`. Sin URL pública la API
+   funciona igual, pero solo revisa la carpeta cada `DRIVE_INTERVALO_REVISION`
+   segundos (default 600), o cuando llamas a `POST /drive/escanear`.
+
+Al arrancar, el log dice `Vigilando la carpeta de Drive ...` y, si hay
+webhook, `Canal de Drive activo hasta ...`.
+
+### Cómo se mantiene vivo
+
+- Google cierra el canal de avisos a los **7 días** como máximo. La API lo
+  renueva sola cuando le queda menos de un día, y al arrancar crea uno nuevo
+  y detiene el anterior (su ID queda guardado en la carpeta).
+- Cada `DRIVE_INTERVALO_REVISION` segundos escanea la carpeta aunque no
+  llegue ningún aviso: si Google pierde uno, la foto se procesa igual.
+- **Plan gratis de Render:** el aviso de Google despierta al contenedor, y
+  el escaneo de arranque procesa la foto. Tarda lo que tarde en despertar
+  (~1 min). Si el servicio pasa **más de 7 días dormido**, el canal caduca y
+  ya nada lo despierta: la siguiente petición cualquiera lo reactiva y el
+  escaneo de arranque recoge todo lo pendiente.
+
+### El campo `estado` de cada lectura
+
+| Valor | Significado |
+|---|---|
+| `pendiente` | Todavía no se procesa |
+| `ok` | Se encontró al menos una placa (`placa` puede ser `null` si el OCR no leyó nada) |
+| `sin_placa` | El detector no encontró ninguna placa |
+| `no_decodificable` | OpenCV no puede abrir el archivo. Típico: fotos **HEIC** de iPhone. Configura la cámara en "Más compatible" (JPG). |
+| `muy_grande` | Pesa más de `MAX_MB_IMAGEN` |
+| `error` | Falló el pipeline; el detalle va en `nota` |
+
+Una foto se procesa una sola vez. Para volver a leerla, súbela de nuevo.
+
+### Desde React Native
+
+```js
+const API = "https://TU-SERVICIO.onrender.com";
+const headers = { "X-API-Key": API_KEY };
+
+const { lecturas } = await (await fetch(`${API}/drive/lecturas?limite=20`, { headers })).json();
+
+// El recorte de la placa, con el header de la API key
+<Image
+  source={{ uri: `${API}/drive/lecturas/${lecturas[0].drive_id}/recorte`, headers }}
+  style={{ width: 200, height: 60 }}
+/>
+```
+
+La API key queda dentro de la app, igual que en una página web: frena el
+abuso casual pero no es un secreto.
 
 ---
 
@@ -272,6 +378,7 @@ alpr_api/
 │   ├── models.py          Esquemas Pydantic de la respuesta
 │   ├── alpr_service.py    Detección + decisión de fallback + recorte
 │   ├── groq_fallback.py   VLM sobre el recorte; nunca lanza excepciones
+│   ├── drive_service.py   Vigila la carpeta de Drive y guarda la placa en cada foto
 │   └── main.py            Endpoints FastAPI
 ├── scripts/
 │   ├── precargar_modelos.py   Descarga los ONNX (lo usa el Dockerfile)
