@@ -12,9 +12,9 @@ pydantic-settings==2.14.0
 # ---- fallback opcional a Groq ----
 httpx==0.28.1
 
-# ---- vigilancia opcional de Google Drive ----
-google-api-python-client==2.200.0
-google-auth==2.58.0
+# ---- vigilancia opcional de iCloud Drive ----
+pyicloud==2.7.0
+psycopg[binary]==3.3.5
 
 # Versiones que instala fast-alpr como dependencia (no hace falta pinnearlas):
 #   fast-plate-ocr 1.1.0, open-image-models 0.6.0, onnxruntime 1.25.0, opencv 4.13.0

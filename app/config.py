@@ -67,29 +67,28 @@ class Settings(BaseSettings):
     groq_timeout: float = 8.0
     groq_base_url: str = "https://api.groq.com/openai/v1/chat/completions"
 
-    # ---------------------------------------------------- Google Drive (opcional)
-    # Vigila una carpeta y lee las placas de cada foto nueva (ver drive_service.py)
-    drive_habilitado: bool = False
-    # Lo que va después de /folders/ en la URL de la carpeta
-    drive_carpeta_id: str = ""
-    # Credenciales de la service account: el JSON completo pegado en una
-    # variable (cómodo en Render) o la ruta al archivo (cómodo en local).
-    google_service_account_json: str = ""
-    google_service_account_file: str = ""
-    # URL pública HTTPS de esta API, sin ruta. Google manda los avisos a
-    # {url_publica}/drive/webhook. En Render se toma sola de RENDER_EXTERNAL_URL.
-    # Si no hay ninguna, no se registra el webhook y queda solo la revisión periódica.
-    url_publica: str = ""
-    render_external_url: str = ""
-    # Cada cuántos segundos se escanea la carpeta aunque no llegue ningún aviso
-    drive_intervalo_revision: int = 600
+    # ---------------------------------------------------- iCloud Drive (opcional)
+    # Vigila una carpeta compartida y lee las placas de cada foto nueva (ver icloud_service.py)
+    icloud_habilitado: bool = False
+    # El enlace de la carpeta compartida: https://www.icloud.com/iclouddrive/...
+    icloud_carpeta: str = ""
+    # Cuenta de Apple con la que entra la API. Tiene que haber agregado la
+    # carpeta a su iCloud Drive. Mejor una cuenta solo para esto que la personal.
+    icloud_apple_id: str = ""
+    icloud_password: str = ""
+    # Postgres donde se guardan la sesión de Apple y las lecturas. En Render
+    # gratis no hay disco, así que tiene que ser externo (ej. Neon, gratis).
+    database_url: str = ""
+    # Cada cuántos segundos se revisa la carpeta mientras el contenedor está
+    # despierto. Si no hay cambios, cada revisión es una sola petición a Apple.
+    icloud_intervalo_revision: int = 120
 
-    @field_validator("drive_carpeta_id")
+    @field_validator("icloud_carpeta")
     @classmethod
-    def _id_de_carpeta(cls, valor: str) -> str:
-        """Acepta el ID o la URL completa de la carpeta, que es lo que se suele pegar."""
-        m = re.search(r"/folders/([A-Za-z0-9_-]+)|[?&]id=([A-Za-z0-9_-]+)", valor)
-        return (m.group(1) or m.group(2)) if m else valor.strip()
+    def _codigo_de_carpeta(cls, valor: str) -> str:
+        """Acepta el enlace completo, que es lo que se suele pegar, o solo el código."""
+        m = re.search(r"/iclouddrive/([A-Za-z0-9_-]+)", valor)
+        return m.group(1) if m else valor.strip()
 
     @property
     def groq_activo(self) -> bool:
@@ -97,16 +96,10 @@ class Settings(BaseSettings):
         return self.groq_habilitado and bool(self.groq_api_key.strip())
 
     @property
-    def drive_activo(self) -> bool:
-        """Drive solo se vigila si está habilitado, hay carpeta y hay credenciales."""
-        credenciales = self.google_service_account_json.strip() or self.google_service_account_file.strip()
-        return self.drive_habilitado and bool(self.drive_carpeta_id.strip()) and bool(credenciales)
-
-    @property
-    def drive_webhook_url(self) -> str | None:
-        """URL que se registra en Google. None si no hay una URL HTTPS pública."""
-        base = (self.url_publica or self.render_external_url).strip().rstrip("/")
-        return f"{base}/drive/webhook" if base.startswith("https://") else None
+    def icloud_activo(self) -> bool:
+        """iCloud solo se vigila si está habilitado y no falta ningún dato."""
+        datos = (self.icloud_carpeta, self.icloud_apple_id, self.icloud_password, self.database_url)
+        return self.icloud_habilitado and all(d.strip() for d in datos)
 
     @property
     def lista_cors(self) -> list[str]:

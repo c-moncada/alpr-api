@@ -1,4 +1,4 @@
-"""Esquemas Pydantic de salida de la API."""
+"""Esquemas Pydantic de entrada y salida de la API."""
 
 from __future__ import annotations
 
@@ -56,10 +56,10 @@ class HealthResponse(BaseModel):
     ocr_model: str
     umbral_confianza: float
     groq_activo: bool
-    drive_activo: bool
+    icloud_activo: bool
 
 
-# ------------------------------------------------------------- Google Drive
+# -------------------------------------------------------------- iCloud Drive
 # Qué pasó con cada foto de la carpeta vigilada
 EstadoLectura = Literal[
     "pendiente",         # todavía no se procesa
@@ -70,14 +70,20 @@ EstadoLectura = Literal[
     "error",             # falló el pipeline; el detalle va en `nota`
 ]
 
+# Si la API puede entrar a iCloud
+Sesion = Literal[
+    "activa",        # hay sesión y Apple confía en ella
+    "falta_codigo",  # Apple pidió el código de verificación: POST /icloud/codigo
+    "sin_iniciar",   # todavía no se intentó entrar (la API recién arrancó)
+]
+
 
 class Lectura(BaseModel):
-    """Resultado de una foto de la carpeta de Drive."""
+    """Resultado de una foto de la carpeta de iCloud Drive."""
 
-    drive_id: str = Field(..., description="ID del archivo en Drive; sirve para pedir el recorte")
+    id: str = Field(..., description="ID de la foto en iCloud; sirve para pedir el recorte")
     nombre: str
-    subida: datetime = Field(..., description="Cuándo se subió la foto a Drive")
-    enlace: str | None = Field(None, description="Link para abrir la foto en Drive")
+    subida: datetime = Field(..., description="Cuándo se subió la foto a iCloud")
     estado: EstadoLectura
     placa: str | None = Field(None, description="Texto de la placa más clara de la foto")
     fuente: Fuente | None = None
@@ -97,9 +103,19 @@ class EscaneoResponse(BaseModel):
     procesadas: int = Field(..., description="Fotos nuevas procesadas en este escaneo")
 
 
-class DriveEstadoResponse(BaseModel):
-    carpeta_id: str
-    webhook_url: str | None = Field(None, description="None = sin webhook, solo revisión periódica")
-    canal_expira: datetime | None
+class IcloudEstadoResponse(BaseModel):
+    carpeta: str | None = Field(None, description="Nombre de la carpeta compartida")
+    sesion: Sesion
     ultimo_escaneo: datetime | None
     ultimo_error: str | None
+    fotos: int | None = Field(None, description="Fotos registradas; None si no se pudo leer Postgres")
+    pendientes: int | None = Field(None, description="Fotos que todavía no se leen")
+
+
+class CodigoRequest(BaseModel):
+    codigo: str = Field(..., pattern=r"^\d{6}$", description="Los 6 dígitos que mandó Apple")
+
+
+class SesionResponse(BaseModel):
+    sesion: Sesion
+    mensaje: str
