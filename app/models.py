@@ -23,10 +23,21 @@ class BoundingBox(BaseModel):
     y2: int
 
 
+class Propietario(BaseModel):
+    """Dueño registrado de una placa (ver /propietarios)."""
+
+    nombre: str = Field(..., min_length=1)
+    telefono: str | None = None
+    correo: str | None = None
+    vehiculo: str | None = Field(None, description="Marca, modelo, color…")
+    notas: str | None = None
+
+
 class Placa(BaseModel):
     """Una placa encontrada en la imagen."""
 
     texto: str | None = Field(None, description="Texto final de la placa, solo A-Z y 0-9")
+    propietario: Propietario | None = Field(None, description="Dueño registrado de la placa, si está en /propietarios")
     imagen_base64: str = Field(..., description="Recorte de la placa en JPEG, codificado en base64")
     fuente: Fuente
 
@@ -87,6 +98,7 @@ class Lectura(BaseModel):
     subida: datetime = Field(..., description="Cuándo se subió la foto a iCloud")
     estado: EstadoLectura
     placa: str | None = Field(None, description="Texto de la placa más clara de la foto")
+    propietario: Propietario | None = Field(None, description="Dueño registrado de la placa, si está en /propietarios")
     fuente: Fuente | None = None
     confianza_ocr: float | None = None
     confianza_deteccion: float | None = None
@@ -120,3 +132,13 @@ class CodigoRequest(BaseModel):
 class SesionResponse(BaseModel):
     sesion: Sesion
     mensaje: str
+
+
+# -------------------------------------------------------------- propietarios
+class PropietarioRegistrado(Propietario):
+    placa: str = Field(..., description="Normalizada: solo A-Z y 0-9, como la lee el OCR")
+    creado: datetime
+
+
+class PropietariosResponse(BaseModel):
+    propietarios: list[PropietarioRegistrado] = Field(..., description="Ordenados por placa")

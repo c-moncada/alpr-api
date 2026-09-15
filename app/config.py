@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     # --------------------------------------------------------------- seguridad
     # Si se define, POST /detect exige el header X-API-Key con este valor.
     api_key: str = ""
+    # Clave aparte para administrar los dueños de las placas (/propietarios).
+    # No va dentro de la app: con API_KEY solo se ve el dueño de cada placa leída.
+    admin_api_key: str = ""
     # Orígenes permitidos para CORS, separados por coma. "*" = cualquiera.
     cors_origenes: str = "*"
 
@@ -76,8 +79,8 @@ class Settings(BaseSettings):
     # carpeta a su iCloud Drive. Mejor una cuenta solo para esto que la personal.
     icloud_apple_id: str = ""
     icloud_password: str = ""
-    # Postgres donde se guardan la sesión de Apple y las lecturas. En Render
-    # gratis no hay disco, así que tiene que ser externo (ej. Neon, gratis).
+    # Postgres: la sesión de Apple, las lecturas y los dueños de las placas.
+    # En Render gratis no hay disco, así que tiene que ser externo (ej. Neon, gratis).
     database_url: str = ""
     # Cada cuántos segundos se revisa la carpeta mientras el contenedor está
     # despierto. Si no hay cambios, cada revisión es una sola petición a Apple.

@@ -49,6 +49,7 @@ Respuesta:
   "placas": [
     {
       "texto": "CVL65718",
+      "propietario": null,
       "imagen_base64": "/9j/4AAQSkZJRgABAQAAAQABAAD...",
       "fuente": "local",
       "confianza_deteccion": 0.934,
@@ -69,6 +70,8 @@ Respuesta:
 - **`texto`** es la placa en mayúsculas, solo `A-Z` y `0-9`. Puede ser `null` si
   el detector encontró la placa pero el OCR no pudo leer nada.
 - **`imagen_base64`** es el recorte de la placa en JPEG.
+- **`propietario`** trae los datos del dueño si la placa está registrada (ver
+  [Dueños de las placas](#dueños-de-las-placas)); si no, `null`.
 - **`confianza_ocr`** es la del carácter **más débil**, no el promedio (ver
   [Configuración](#configuración)).
 
@@ -118,9 +121,14 @@ foto y te muestra el texto de la placa y el recorte ya como imagen. Swagger
 | `GET` | `/icloud/estado` | Sesión con Apple, fotos pendientes y último error |
 | `POST` | `/icloud/sesion` | Entra a iCloud; si Apple pide verificación, te manda el código |
 | `POST` | `/icloud/codigo` | Le pasa a la API el código de verificación de Apple |
+| `GET` | `/propietarios` | Placas registradas con los datos de su dueño |
+| `PUT` | `/propietarios/{placa}` | Registra o cambia el dueño de una placa |
+| `DELETE` | `/propietarios/{placa}` | Saca una placa del registro |
 
 Los `/icloud/*` responden `503` si la vigilancia de iCloud no está configurada
 (ver [Vigilar una carpeta de iCloud Drive](#vigilar-una-carpeta-de-icloud-drive)).
+Los `/propietarios` piden `ADMIN_API_KEY` en vez de `API_KEY` (ver
+[Dueños de las placas](#dueños-de-las-placas)).
 
 Swagger en `/docs`; el botón **Authorize** es para poner la API key.
 
@@ -188,6 +196,8 @@ build si los modelos no quedaron en caché: un deploy roto no llega a producció
   si llamas a la API desde una página web, la key queda visible en el
   navegador. Frena el abuso casual, pero no es un secreto; si necesitas que lo
   sea, llama a esta API desde tu propio backend.
+- **`ADMIN_API_KEY`**: la de `/propietarios`. Esa no va en la app (ver
+  [Dueños de las placas](#dueños-de-las-placas)).
 - **`CORS_ORIGENES`**: qué dominios pueden llamar a la API desde un navegador,
   separados por coma (ej. `https://miapp.com`). El default `*` acepta
   cualquiera; cuando tengas el frontend publicado, pon su dominio.
@@ -349,6 +359,47 @@ abuso casual pero no es un secreto.
 
 ---
 
+## Dueños de las placas
+
+Opcional. Registras las placas que te interesan con los datos de su dueño, y
+cada vez que la API lee una de ellas (en `/detect` o en una foto de iCloud)
+devuelve esos datos en `propietario`:
+
+```json
+"propietario": {
+  "nombre": "Juan Pérez",
+  "telefono": "9999-9999",
+  "correo": null,
+  "vehiculo": "Chevrolet Cavalier rojo",
+  "notas": null
+}
+```
+
+Se guardan en la misma base de `DATABASE_URL` (tabla `propietarios`) y se
+administran con `/propietarios`, que pide **otra clave**: `ADMIN_API_KEY`. La
+`API_KEY` va dentro de la app y cualquiera puede sacarla del APK; con ella
+solo se ve el dueño de una placa que la API leyó, nunca la lista completa, y
+no se puede cambiar nada.
+
+1. En Render → Environment agrega `ADMIN_API_KEY` con un valor largo y
+   aleatorio, por ejemplo el que da
+   `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+2. En `/docs`, **Authorize** con esa clave. Sirve también para las demás rutas.
+3. `PUT /propietarios/{placa}` con la placa en la ruta y los datos en el cuerpo:
+
+   ```json
+   {"nombre": "Juan Pérez", "telefono": "9999-9999", "vehiculo": "Chevrolet Cavalier rojo"}
+   ```
+
+La placa se puede escribir con espacios o guiones (`CVL 657 18`): se guarda
+normalizada (`CVL65718`), igual que la lee el OCR. La comparación es exacta:
+si el OCR confunde un carácter (`0`/`O`, `1`/`I`), no coincide, y así nunca
+sale el dueño de otra placa.
+
+Son datos personales: guarda solo los de personas que estén de acuerdo.
+
+---
+
 ## El campo `fuente`: de dónde salió cada lectura
 
 | Valor | Significado |
@@ -440,7 +491,7 @@ alpr_api/
 │   ├── alpr_service.py    Detección + decisión de fallback + recorte
 │   ├── groq_fallback.py   VLM sobre el recorte; nunca lanza excepciones
 │   ├── icloud_service.py  Vigila la carpeta de iCloud y lee la placa de cada foto nueva
-│   ├── db.py              Postgres: sesión de Apple y lecturas de iCloud
+│   ├── db.py              Postgres: sesión de Apple, lecturas y dueños de las placas
 │   └── main.py            Endpoints FastAPI
 ├── scripts/
 │   ├── precargar_modelos.py   Descarga los ONNX (lo usa el Dockerfile)
@@ -469,6 +520,9 @@ alpr_api/
 | Apple dice que no puede enviar códigos a ese número | Apple limita los SMS por número; espera unas horas y pide el código una sola vez. Si en tu PC hay una sesión de confianza de la cuenta, `scripts/subir_sesion_icloud.py` la sube sin código. |
 | `503` "no se pudo usar Postgres" | `DATABASE_URL` está mal o la base no responde. |
 | Una foto nueva tarda en salir | Render gratis estaba dormido. Ver [Cómo se mantiene al día](#cómo-se-mantiene-al-día). |
+| `401` en `/propietarios` | Esas rutas piden `ADMIN_API_KEY`, no `API_KEY`. En `/docs`, **Authorize** con la de admin. |
+| `503` en `/propietarios` | Falta `ADMIN_API_KEY` o `DATABASE_URL` en Render. |
+| La placa está registrada pero no sale el dueño | El OCR la leyó con un carácter distinto: compara el `texto` o la `placa` de la lectura con la registrada. La comparación es exacta. |
 
 ## Créditos
 
