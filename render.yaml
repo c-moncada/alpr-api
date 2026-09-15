@@ -19,15 +19,19 @@ services:
       # Render la pide al crear el Blueprint; déjala vacía si no usas Groq
       - key: GROQ_API_KEY
         sync: false
-      # Vigilancia de Google Drive. El webhook usa RENDER_EXTERNAL_URL solo.
-      # Las tres van con sync: false para que el Blueprint no pise lo que se
-      # ponga en el panel (el código ya trae DRIVE_HABILITADO=false por default).
-      # En un Blueprint que ya existe Render las ignora: se agregan a mano en
-      # Environment.
-      - key: DRIVE_HABILITADO
+      # Vigilancia de iCloud Drive. Todas van con sync: false para que el
+      # Blueprint no pise lo que se ponga en el panel (el código ya trae
+      # ICLOUD_HABILITADO=false por default). En un Blueprint que ya existe
+      # Render las ignora: se agregan a mano en Environment.
+      - key: ICLOUD_HABILITADO
         sync: false
-      - key: DRIVE_CARPETA_ID
+      # El enlace de la carpeta compartida
+      - key: ICLOUD_CARPETA
         sync: false
-      # El JSON completo de la service account
-      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+      - key: ICLOUD_APPLE_ID
+        sync: false
+      - key: ICLOUD_PASSWORD
+        sync: false
+      # Postgres externo (ej. Neon): Render gratis no tiene disco
+      - key: DATABASE_URL
         sync: false

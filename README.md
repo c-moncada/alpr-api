@@ -1,12 +1,14 @@
 # API de Reconocimiento de Placas Vehiculares (ALPR)
 
 Backend FastAPI: le mandas la foto de un vehículo y te devuelve **el texto de
-la placa y la foto recortada de la placa**. No guarda nada (ni imágenes ni
-historial), así que corre en cualquier contenedor sin disco persistente.
+la placa y la foto recortada de la placa**. `/detect` no guarda nada (ni
+imágenes ni historial), así que corre en cualquier contenedor sin disco
+persistente.
 
 La detección y el OCR corren con modelos ONNX locales: sin API key, sin
-tokens, sin cuota. El único servicio externo es un fallback opcional a Groq,
-apagado por default.
+tokens, sin cuota. Lo externo es opcional y viene apagado: un fallback a Groq
+y la vigilancia de una carpeta de iCloud Drive, que guarda sus lecturas en
+Postgres.
 
 ## La idea central: son dos problemas, no uno
 
@@ -110,14 +112,15 @@ foto y te muestra el texto de la placa y el recorte ya como imagen. Swagger
 |---|---|---|
 | `GET` | `/health` | Estado del servicio. Render lo usa como health check; no pide API key. |
 | `POST` | `/detect` | Imagen → texto y recorte de cada placa |
-| `GET` | `/drive/lecturas` | Fotos recientes de la carpeta de Drive con su placa (`?placa=HAB1234` para buscar) |
-| `GET` | `/drive/lecturas/{drive_id}/recorte` | Recorte JPEG de la placa de una foto de Drive |
-| `POST` | `/drive/escanear` | Revisa la carpeta ya, sin esperar el aviso de Google |
-| `GET` | `/drive/estado` | Canal de avisos, último escaneo y último error |
-| `POST` | `/drive/webhook` | Lo llama Google, no tú. Valida un token propio en vez de la API key. |
+| `GET` | `/icloud/lecturas` | Fotos recientes de la carpeta de iCloud con su placa (`?placa=HAB1234` para buscar) |
+| `GET` | `/icloud/lecturas/{id}/recorte` | Recorte JPEG de la placa de una foto de iCloud |
+| `POST` | `/icloud/escanear` | Revisa la carpeta y lee las fotos pendientes ya |
+| `GET` | `/icloud/estado` | Sesión con Apple, fotos pendientes y último error |
+| `POST` | `/icloud/sesion` | Entra a iCloud; si Apple pide verificación, te manda el código |
+| `POST` | `/icloud/codigo` | Le pasa a la API el código de verificación de Apple |
 
-Los `/drive/*` responden `503` si la vigilancia de Drive no está configurada
-(ver [Vigilar una carpeta de Google Drive](#vigilar-una-carpeta-de-google-drive)).
+Los `/icloud/*` responden `503` si la vigilancia de iCloud no está configurada
+(ver [Vigilar una carpeta de iCloud Drive](#vigilar-una-carpeta-de-icloud-drive)).
 
 Swagger en `/docs`; el botón **Authorize** es para poner la API key.
 
@@ -156,8 +159,9 @@ El repo trae `Dockerfile` y `render.yaml`, así que el deploy es un Blueprint:
 
 1. Sube el proyecto a GitHub. El `.gitignore` ya deja fuera `.env`, `.venv` y `data/`.
 2. En Render: **New → Blueprint** y elige el repo.
-3. Te va a pedir `GROQ_API_KEY`: déjala vacía si no usas Groq. `API_KEY` la
-   genera Render sola; la copias desde **Environment** en el panel del servicio.
+3. Te va a pedir `GROQ_API_KEY` y las variables de iCloud (`ICLOUD_*` y
+   `DATABASE_URL`): déjalas vacías si no las usas. `API_KEY` la genera Render
+   sola; la copias desde **Environment** en el panel del servicio.
 4. Cuando termine, abre `https://TU-SERVICIO.onrender.com/health`.
 
 **Por qué Docker y no el runtime nativo de Python:** los modelos se descargan
@@ -190,70 +194,104 @@ build si los modelos no quedaron en caché: un deploy roto no llega a producció
 
 ---
 
-## Vigilar una carpeta de Google Drive
+## Vigilar una carpeta de iCloud Drive
 
-Opcional y apagado por default. Subes fotos a una carpeta de Drive, la API
-se entera sola y lee la placa de cada una:
+Opcional y apagado por default. Cada foto que llega a una carpeta compartida
+de iCloud Drive (en este proyecto, la que se toma cuando pasa el carro) se
+registra sola, y la API lee su placa:
 
 ```
-foto nueva en Drive ──aviso──▶ POST /drive/webhook ──▶ escanea la carpeta
-                                                              │
-      React Native ◀── GET /drive/lecturas ◀── placa guardada en la foto
+cada 2 min, o cuando la app pide lecturas:
+
+  CloudKit: ¿qué cambió? ──▶ Postgres ("pendiente") ──▶ lee la placa ──▶ Postgres
+
+  React Native ◀── GET /icloud/lecturas ◀── Postgres
 ```
 
-**El aviso de Google no dice qué archivo cambió**, solo que algo cambió. Cada
-aviso dispara un escaneo que procesa las fotos de la carpeta que todavía no
-tienen resultado.
+Apple no tiene una API pública de iCloud Drive, así que esto funciona
+distinto que con Google Drive:
 
-**El resultado se guarda en la propia foto**, como `appProperties`: metadatos
-privados de esta app que el usuario no ve en Drive. Por eso la API sigue sin
-base de datos ni disco: si Render reinicia o duerme el contenedor, al
-arrancar escanea la carpeta y retoma donde se quedó.
+- **La API entra con una cuenta de Apple** (correo y contraseña) usando
+  [`pyicloud`](https://github.com/timlaing/pyicloud), una librería no
+  oficial. La primera vez, y cuando Apple deja de confiar en la sesión
+  (cada **unos 30 días**), hay que pasarle un código de verificación: ver
+  [El código de Apple](#el-código-de-apple).
+- **Apple no avisa cuando llega una foto.** La API revisa la carpeta cada
+  `ICLOUD_INTERVALO_REVISION` segundos (default 120) mientras está despierta,
+  y justo antes de responder `GET /icloud/lecturas`. Cada revisión le pide a
+  CloudKit solo lo que cambió desde la anterior: si no hay nada nuevo, es una
+  sola petición.
+- **El resultado no se puede guardar en la foto**, así que va a Postgres
+  junto con la sesión de Apple. Render gratis no tiene disco: sin una base
+  externa habría que poner el código cada vez que el contenedor se duerme.
 
 Por cada foto se guarda la placa más clara (`placas[0]`), su bbox y cuántas
-placas había. El recorte no se guarda: `/drive/lecturas/{id}/recorte` lo
+placas había. El recorte no se guarda: `/icloud/lecturas/{id}/recorte` lo
 vuelve a cortar de la foto original con el bbox, sin correr otra vez el modelo.
 
 ### Configuración
 
-1. En [Google Cloud Console](https://console.cloud.google.com): crea un
-   proyecto, habilita **Google Drive API** y crea una **service account**. En
-   su pestaña *Keys* → *Add key* → *JSON*, descarga el archivo.
-2. En Drive, **comparte la carpeta con el email de la service account**
-   (`...@....iam.gserviceaccount.com`) **como Editor**. Lector no alcanza: la
-   API escribe el resultado en cada foto.
-3. Variables de entorno:
+1. **Una cuenta de Apple para la API.** Mejor una nueva, solo para esto, que
+   tu cuenta personal: su contraseña va a quedar en las variables de Render.
+   El código de verificación le llega por SMS al teléfono de la cuenta. Si
+   tiene la Protección avanzada de datos, activa *Acceder a los datos de
+   iCloud en la web*. La API lee todo lo que el dueño de la carpeta le
+   comparta a esa cuenta, así que no la uses para otras carpetas del mismo dueño.
+2. **Con esa cuenta, agrega la carpeta a su iCloud Drive:** abre el enlace de
+   la carpeta compartida, inicia sesión y toca **Agregar a iCloud Drive**.
+3. **Una base Postgres gratis**, por ejemplo en [Neon](https://neon.tech):
+   crea un proyecto y copia la *connection string*. La API crea sus tablas sola.
+4. Variables de entorno:
 
    ```ini
-   DRIVE_HABILITADO=true
-   DRIVE_CARPETA_ID=1AbC...        # lo que va después de /folders/ en la URL
-   # local: el archivo JSON junto al proyecto (ya está en .gitignore)
-   GOOGLE_SERVICE_ACCOUNT_FILE=service-account.json
-   # Render: el JSON completo en una sola variable
-   GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+   ICLOUD_HABILITADO=true
+   ICLOUD_CARPETA=https://www.icloud.com/iclouddrive/0b4e...#Mediciones   # el enlace tal cual
+   ICLOUD_APPLE_ID=cuenta-de-la-api@icloud.com
+   ICLOUD_PASSWORD=...
+   DATABASE_URL=postgresql://usuario:clave@host/base?sslmode=require
    ```
 
-4. **El webhook necesita una URL HTTPS pública.** En Render se toma sola de
-   `RENDER_EXTERNAL_URL`. En local, levanta un túnel (`ngrok http 8000`) y
-   pon `URL_PUBLICA=https://xxxx.ngrok-free.app`. Sin URL pública la API
-   funciona igual, pero solo revisa la carpeta cada `DRIVE_INTERVALO_REVISION`
-   segundos (default 600), o cuando llamas a `POST /drive/escanear`.
+5. La primera vez, **pásale el código de Apple** (siguiente sección).
 
-Al arrancar, el log dice `Vigilando la carpeta de Drive ...` y, si hay
-webhook, `Canal de Drive activo hasta ...`.
+Al arrancar, el log dice `Vigilando la carpeta de iCloud ...` y, cuando
+entra, `Sesión de iCloud abierta`.
 
-### Cómo se mantiene vivo
+### El código de Apple
 
-- Google cierra el canal de avisos a los **7 días** como máximo. La API lo
-  renueva sola cuando le queda menos de un día, y al arrancar crea uno nuevo
-  y detiene el anterior (su ID queda guardado en la carpeta).
-- Cada `DRIVE_INTERVALO_REVISION` segundos escanea la carpeta aunque no
-  llegue ningún aviso: si Google pierde uno, la foto se procesa igual.
-- **Plan gratis de Render:** el aviso de Google despierta al contenedor, y
-  el escaneo de arranque procesa la foto. Tarda lo que tarde en despertar
-  (~1 min). Si el servicio pasa **más de 7 días dormido**, el canal caduca y
-  ya nada lo despierta: la siguiente petición cualquiera lo reactiva y el
-  escaneo de arranque recoge todo lo pendiente.
+La primera vez, y cada unos 30 días, `GET /icloud/estado` dice
+`"sesion": "falta_codigo"`. Son dos pasos seguidos:
+
+```bash
+# 1. Apple manda el código por SMS (o a los dispositivos de la cuenta)
+curl -X POST https://TU-SERVICIO.onrender.com/icloud/sesion -H "X-API-Key: TU_API_KEY"
+
+# 2. Se lo pasas a la API
+curl -X POST https://TU-SERVICIO.onrender.com/icloud/codigo \
+  -H "X-API-Key: TU_API_KEY" -H "Content-Type: application/json" \
+  -d '{"codigo": "123456"}'
+```
+
+También se puede desde `/docs`. Si el contenedor se reinicia entre los dos
+pasos, el código ya no sirve: pide otro con el paso 1.
+
+Cuando la sesión vence, la API lo intenta una vez sola y Apple te manda un
+código: si te llega, pásalo directo al paso 2. Después ya no lo intenta por
+su cuenta, porque cada intento es otro SMS: espera a que llames al paso 1.
+
+### Cómo se mantiene al día
+
+- **Plan gratis de Render:** el contenedor se duerme tras 15 min sin tráfico
+  y, dormido, no revisa nada. La petición de la app lo despierta (~1 min) y,
+  antes de responder, la API revisa la carpeta: las fotos que llegaron
+  mientras dormía salen como `pendiente` y su placa se lee en segundo plano.
+  Vuelve a pedir la lista en unos segundos para verlas leídas.
+- Si quieres que las fotos se lean apenas llegan aunque nadie abra la app,
+  mantén el servicio despierto con un *cron* gratis (ej.
+  [cron-job.org](https://cron-job.org)) que llame a `GET /health` cada 10
+  minutos. Un servicio despierto todo el mes cabe en las 750 horas gratis de
+  Render.
+- Si Render reinicia el contenedor, la API toma la sesión de Postgres y
+  sigue sin pedir código.
 
 ### El campo `estado` de cada lectura
 
@@ -266,9 +304,9 @@ webhook, `Canal de Drive activo hasta ...`.
 | `muy_grande` | Pesa más de `MAX_MB_IMAGEN` |
 | `error` | Falló el pipeline; el detalle va en `nota` |
 
-Cada foto se lee una sola vez. Si la reemplazas (subir otra con el mismo
-nombre y elegir *Reemplazar*), Drive guarda una versión nueva del mismo
-archivo: la API lo nota porque cambia el MD5 del contenido y la vuelve a leer.
+Cada foto se lee una sola vez. Si la reemplazas por otra con el mismo
+nombre, la API lo nota porque cambia el checksum del archivo y la vuelve a
+leer. Si la borras de la carpeta, desaparece de las lecturas.
 
 ### Desde React Native
 
@@ -276,14 +314,19 @@ archivo: la API lo nota porque cambia el MD5 del contenido y la vuelve a leer.
 const API = "https://TU-SERVICIO.onrender.com";
 const headers = { "X-API-Key": API_KEY };
 
-const { lecturas } = await (await fetch(`${API}/drive/lecturas?limite=20`, { headers })).json();
+const { lecturas } = await (await fetch(`${API}/icloud/lecturas?limite=20`, { headers })).json();
 
 // El recorte de la placa, con el header de la API key
 <Image
-  source={{ uri: `${API}/drive/lecturas/${lecturas[0].drive_id}/recorte`, headers }}
+  source={{ uri: `${API}/icloud/lecturas/${lecturas[0].id}/recorte`, headers }}
   style={{ width: 200, height: 60 }}
 />
 ```
+
+Si alguna lectura viene `pendiente`, vuelve a pedir la lista en unos
+segundos. Si la app ya usaba `/drive/lecturas`: cambia la ruta a
+`/icloud/...` y `drive_id` por `id`. Lo demás de cada lectura es igual,
+menos `enlace`, que ya no existe.
 
 La API key queda dentro de la app, igual que en una página web: frena el
 abuso casual pero no es un secreto.
@@ -380,7 +423,8 @@ alpr_api/
 │   ├── models.py          Esquemas Pydantic de la respuesta
 │   ├── alpr_service.py    Detección + decisión de fallback + recorte
 │   ├── groq_fallback.py   VLM sobre el recorte; nunca lanza excepciones
-│   ├── drive_service.py   Vigila la carpeta de Drive y guarda la placa en cada foto
+│   ├── icloud_service.py  Vigila la carpeta de iCloud y lee la placa de cada foto nueva
+│   ├── db.py              Postgres: sesión de Apple y lecturas de iCloud
 │   └── main.py            Endpoints FastAPI
 ├── scripts/
 │   ├── precargar_modelos.py   Descarga los ONNX (lo usa el Dockerfile)
@@ -402,6 +446,11 @@ alpr_api/
 | Lee la placa con un carácter mal | Sube a `OCR_MODEL=global-plates-mobile-vit-v2-model`. Si el error es sistemático con placas hondureñas, toca fine-tuning. |
 | El servicio se reinicia solo en Render | Probablemente se quedó sin RAM (512 MB en el plan gratis). Vuelve a los modelos default o baja `MAX_MB_IMAGEN`. |
 | Error de CORS en el navegador | Tu dominio no está en `CORS_ORIGENES`. |
+| `/icloud/estado` dice `falta_codigo` | Apple pidió el código (la primera vez o cada ~30 días). Ver [El código de Apple](#el-código-de-apple). |
+| `409` en `POST /icloud/codigo` | La API se reinició entre los dos pasos y el código ya no sirve. Pide otro con `POST /icloud/sesion`. |
+| `ultimo_error`: Apple rechazó `ICLOUD_APPLE_ID` o `ICLOUD_PASSWORD` | Revisa el correo y la contraseña. Tiene que ser la de la cuenta: Apple no acepta contraseñas de app. |
+| `503` "no se pudo usar Postgres" | `DATABASE_URL` está mal o la base no responde. |
+| Una foto nueva tarda en salir | Render gratis estaba dormido. Ver [Cómo se mantiene al día](#cómo-se-mantiene-al-día). |
 
 ## Créditos
 
