@@ -1,9 +1,10 @@
-"""Postgres: la sesión de iCloud y el resultado de cada foto.
+"""Postgres: la sesión de iCloud, el resultado de cada foto y los dueños de las placas.
 
 Con Google Drive el resultado se guardaba en la propia foto (appProperties)
 y no hacía falta base de datos. iCloud no tiene nada parecido y Render gratis
 no tiene disco, así que aquí va todo lo que tiene que sobrevivir a un
-reinicio: la sesión de Apple, el syncToken de CloudKit y las lecturas.
+reinicio: la sesión de Apple, el syncToken de CloudKit y las lecturas. Los
+dueños de las placas (tabla propietarios) también van aquí.
 
 Una conexión por operación: hay poco tráfico, y así no hay que vigilar
 conexiones que el servidor corta cuando se suspende (Neon lo hace a los 5 min).
@@ -42,6 +43,15 @@ create table if not exists icloud_fotos (
 );
 create index if not exists icloud_fotos_subida on icloud_fotos (subida desc);
 create index if not exists icloud_fotos_placa on icloud_fotos (placa);
+create table if not exists propietarios (
+    placa     text primary key,  -- normalizada: solo A-Z y 0-9, como la lee el OCR
+    nombre    text not null,
+    telefono  text,
+    correo    text,
+    vehiculo  text,              -- ej. "Chevrolet Cavalier rojo"
+    notas     text,
+    creado    timestamptz not null default now()
+);
 """
 
 # Lo que se escribe al guardar un resultado. Van todas: las que no vienen
@@ -143,12 +153,25 @@ def borrar(id_: str) -> None:
         con.execute("delete from icloud_fotos where id = %s", (id_,))
 
 
+# El dueño de la placa como objeto, o null si no está registrada
+_PROPIETARIO = (
+    "case when p.placa is null then null else jsonb_build_object("
+    "'nombre', p.nombre, 'telefono', p.telefono, 'correo', p.correo,"
+    " 'vehiculo', p.vehiculo, 'notas', p.notas) end"
+)
+
+
 def listar(limite: int, placa: str | None = None) -> list[dict]:
-    """Las fotos más recientes primero. Con `placa`, solo las que tienen esa placa."""
-    filtro = "where placa = %(placa)s" if placa else ""
+    """Las fotos más recientes primero, con el dueño de la placa si está registrada.
+
+    Con `placa`, solo las que tienen esa placa.
+    """
+    filtro = "where f.placa = %(placa)s" if placa else ""
     with conectar() as con:
         return con.execute(
-            f"select * from icloud_fotos {filtro} order by subida desc limit %(limite)s",
+            f"select f.*, {_PROPIETARIO} as propietario from icloud_fotos f"
+            f" left join propietarios p on p.placa = f.placa {filtro}"
+            " order by f.subida desc limit %(limite)s",
             {"placa": placa, "limite": limite},
         ).fetchall()
 
@@ -164,3 +187,38 @@ def contar() -> dict:
             "select count(*) as fotos, count(*) filter (where estado = 'pendiente') as pendientes"
             " from icloud_fotos"
         ).fetchone()
+
+
+# --------------------------------------------------------------- propietarios
+CAMPOS_PROPIETARIO = ("nombre", "telefono", "correo", "vehiculo", "notas")
+
+
+def guardar_propietario(placa: str, datos: dict) -> dict:
+    """Registra el dueño de una placa (ya normalizada), o lo reemplaza si ya estaba."""
+    valores = {k: datos.get(k) for k in CAMPOS_PROPIETARIO}
+    with conectar() as con:
+        return con.execute(
+            "insert into propietarios (placa, nombre, telefono, correo, vehiculo, notas)"
+            " values (%(placa)s, %(nombre)s, %(telefono)s, %(correo)s, %(vehiculo)s, %(notas)s)"
+            " on conflict (placa) do update set nombre = excluded.nombre, telefono = excluded.telefono,"
+            " correo = excluded.correo, vehiculo = excluded.vehiculo, notas = excluded.notas"
+            " returning *",
+            {**valores, "placa": placa},
+        ).fetchone()
+
+
+def listar_propietarios() -> list[dict]:
+    with conectar() as con:
+        return con.execute("select * from propietarios order by placa").fetchall()
+
+
+def borrar_propietario(placa: str) -> bool:
+    with conectar() as con:
+        return con.execute("delete from propietarios where placa = %s", (placa,)).rowcount > 0
+
+
+def propietarios_de(placas: list[str]) -> dict[str, dict]:
+    """Los dueños registrados de estas placas, por placa."""
+    with conectar() as con:
+        filas = con.execute("select * from propietarios where placa = any(%s)", (placas,)).fetchall()
+    return {f["placa"]: f for f in filas}

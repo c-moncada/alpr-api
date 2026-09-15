@@ -11,6 +11,10 @@ services:
       # Render genera un valor aleatorio; lo copias desde Environment
       - key: API_KEY
         generateValue: true
+      # La de /propietarios; no va dentro de la app. En un Blueprint que ya
+      # existe Render no la crea: se agrega a mano en Environment.
+      - key: ADMIN_API_KEY
+        generateValue: true
       # Cuando tengas el frontend publicado, pon aquí su dominio
       - key: CORS_ORIGENES
         value: "*"

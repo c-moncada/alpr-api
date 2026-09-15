@@ -17,6 +17,10 @@ Opcional: vigilar una carpeta compartida de iCloud Drive y leer la placa de
 cada foto nueva (endpoints /icloud/*). iCloud no deja guardar el resultado
 en la propia foto, así que las lecturas y la sesión de Apple van a Postgres.
 
+Opcional: registrar el dueño de cada placa (endpoints /propietarios, con
+ADMIN_API_KEY). /detect y /icloud/lecturas lo devuelven cuando leen una
+placa registrada.
+
 Levantar en local:
     uvicorn app.main:app --reload --port 8000
 Docs interactivas:
@@ -62,6 +66,9 @@ from app.models import (
     IcloudEstadoResponse,
     LecturasResponse,
     Placa,
+    Propietario,
+    PropietarioRegistrado,
+    PropietariosResponse,
     SesionResponse,
 )
 
@@ -84,6 +91,14 @@ async def lifespan(app: FastAPI):
     alpr_service.obtener_alpr()
     log.info("Fallback Groq activo: %s", settings.groq_activo)
     log.info("API key requerida: %s", bool(settings.api_key))
+    log.info("Registro de propietarios activo: %s", bool(settings.admin_api_key and settings.database_url))
+
+    if settings.database_url:
+        try:
+            # Antes de abrir el puerto: la petición que despierta a Render ya encuentra las tablas
+            await asyncio.to_thread(db.crear_tablas)
+        except Exception:
+            log.exception("No se pudo preparar Postgres: revisa DATABASE_URL")
 
     tarea_icloud = None
     if settings.icloud_activo:
@@ -92,11 +107,6 @@ async def lifespan(app: FastAPI):
             settings.icloud_carpeta,
             settings.icloud_intervalo_revision,
         )
-        try:
-            # Antes de abrir el puerto: la petición que despierta a Render ya encuentra las tablas
-            await asyncio.to_thread(db.crear_tablas)
-        except Exception:
-            log.exception("No se pudo preparar Postgres: revisa DATABASE_URL")
         tarea_icloud = asyncio.create_task(icloud_service.ciclo_icloud())
     elif settings.icloud_habilitado:
         log.warning("ICLOUD_HABILITADO=true pero falta ICLOUD_CARPETA, ICLOUD_APPLE_ID, ICLOUD_PASSWORD o DATABASE_URL")
@@ -124,17 +134,35 @@ app.add_middleware(
 _header_api_key = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
+def _clave_valida(clave: str | None, esperada: str) -> bool:
+    return bool(esperada) and bool(clave) and secrets.compare_digest(clave.encode(), esperada.encode())
+
+
 def verificar_api_key(clave: str | None = Security(_header_api_key)) -> None:
-    """Si API_KEY está definida, exige el header X-API-Key con ese valor."""
+    """Si API_KEY está definida, exige el header X-API-Key con ese valor.
+
+    ADMIN_API_KEY también sirve, así en /docs basta con autorizar una vez.
+    """
     if not settings.api_key:
         return
-    if not clave or not secrets.compare_digest(clave.encode(), settings.api_key.encode()):
+    if not (_clave_valida(clave, settings.api_key) or _clave_valida(clave, settings.admin_api_key)):
         raise HTTPException(status_code=401, detail="API key inválida o ausente")
 
 
-def _a_placa(p: dict) -> Placa:
+def _a_placa(p: dict, propietario: dict | None) -> Placa:
     jpeg = p.pop("recorte_jpeg")
-    return Placa(imagen_base64=base64.b64encode(jpeg).decode("ascii"), **p)
+    return Placa(imagen_base64=base64.b64encode(jpeg).decode("ascii"), propietario=propietario, **p)
+
+
+def _propietarios(placas: list[str]) -> dict[str, dict]:
+    """Los dueños registrados de estas placas. Sin Postgres, /detect sigue igual."""
+    if not settings.database_url or not placas:
+        return {}
+    try:
+        return db.propietarios_de(placas)
+    except psycopg.Error:
+        log.exception("No se pudo buscar el dueño de las placas")
+        return {}
 
 
 # ----------------------------------------------------------------- endpoints
@@ -166,7 +194,8 @@ def detect(
 
     `placas` viene vacía si no se encontró ninguna; si hay varias, `placas[0]`
     es la de mayor confianza. El recorte es un JPEG en base64: en un navegador
-    se muestra con `<img src="data:image/jpeg;base64,{imagen_base64}">`.
+    se muestra con `<img src="data:image/jpeg;base64,{imagen_base64}">`. Si la
+    placa está registrada en `/propietarios`, `propietario` trae los datos del dueño.
     """
     limite = int(settings.max_mb_imagen * 1024 * 1024)
     contenido = archivo.file.read(limite + 1)
@@ -183,7 +212,8 @@ def detect(
         raise HTTPException(status_code=400, detail="no se pudo decodificar la imagen")
 
     placas, ms = alpr_service.procesar_frame(frame)
-    return DetectResponse(placas=[_a_placa(p) for p in placas], ms_procesamiento=ms)
+    duenos = _propietarios([p["texto"] for p in placas if p["texto"]])
+    return DetectResponse(placas=[_a_placa(p, duenos.get(p["texto"])) for p in placas], ms_procesamiento=ms)
 
 
 # -------------------------------------------------------------- iCloud Drive
@@ -221,7 +251,8 @@ def icloud_lecturas(
     limite: int = Query(50, ge=1, le=1000),
     placa: str | None = Query(None, description="Busca solo las fotos con esta placa exacta"),
 ) -> LecturasResponse:
-    """Las fotos más recientes de la carpeta con la placa leída en cada una.
+    """Las fotos más recientes de la carpeta con la placa leída en cada una, y
+    su dueño en `propietario` si la placa está registrada.
 
     Antes de responder revisa si llegaron fotos nuevas. Esas salen con
     `estado: "pendiente"` y su placa se lee en segundo plano: vuelve a pedir
@@ -290,3 +321,60 @@ def icloud_codigo(pedido: CodigoRequest, tareas: BackgroundTasks) -> SesionRespo
     icloud_service.validar_codigo(pedido.codigo)
     tareas.add_task(icloud_service.escanear_sin_excepciones)
     return SesionResponse(sesion="activa", mensaje="sesión activa; revisando la carpeta")
+
+
+# -------------------------------------------------------------- propietarios
+def requiere_postgres() -> None:
+    if not settings.database_url:
+        raise HTTPException(status_code=503, detail="el registro de propietarios necesita DATABASE_URL")
+
+
+def verificar_admin(clave: str | None = Security(_header_api_key)) -> None:
+    """Los /propietarios piden ADMIN_API_KEY: la API_KEY va dentro de la app."""
+    if not settings.admin_api_key:
+        raise HTTPException(status_code=503, detail="define ADMIN_API_KEY para administrar los propietarios")
+    if not _clave_valida(clave, settings.admin_api_key):
+        raise HTTPException(status_code=401, detail="esta ruta pide ADMIN_API_KEY en el header X-API-Key")
+
+
+_deps_admin = [Depends(verificar_admin), Depends(requiere_postgres)]
+
+
+def _placa_de_ruta(placa: str) -> str:
+    normalizada = normalizar_placa(placa)
+    if not normalizada:
+        raise HTTPException(status_code=422, detail="la placa tiene que tener letras o números")
+    return normalizada
+
+
+@app.get("/propietarios", response_model=PropietariosResponse, tags=["propietarios"], dependencies=_deps_admin)
+def propietarios_listar() -> PropietariosResponse:
+    """Todas las placas registradas con los datos de su dueño."""
+    return PropietariosResponse(propietarios=db.listar_propietarios())
+
+
+@app.put(
+    "/propietarios/{placa}",
+    response_model=PropietarioRegistrado,
+    tags=["propietarios"],
+    dependencies=_deps_admin,
+)
+def propietarios_guardar(
+    datos: Propietario,
+    placa: str = Path(..., description="Con o sin espacios o guiones: se guarda como la lee el OCR (CVL65718)"),
+) -> PropietarioRegistrado:
+    """Registra el dueño de una placa, o lo reemplaza si ya estaba.
+
+    Desde ese momento `/detect` y `/icloud/lecturas` devuelven estos datos en
+    `propietario` cuando leen la placa. La comparación es exacta: si el OCR
+    confunde un carácter (0/O, 1/I), no coincide.
+    """
+    return PropietarioRegistrado(**db.guardar_propietario(_placa_de_ruta(placa), datos.model_dump()))
+
+
+@app.delete("/propietarios/{placa}", status_code=204, tags=["propietarios"], dependencies=_deps_admin)
+def propietarios_borrar(placa: str = Path(..., description="Con o sin espacios o guiones")) -> Response:
+    """Saca una placa del registro."""
+    if not db.borrar_propietario(_placa_de_ruta(placa)):
+        raise HTTPException(status_code=404, detail="esa placa no está registrada")
+    return Response(status_code=204)

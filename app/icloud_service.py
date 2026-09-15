@@ -498,6 +498,7 @@ def _a_lectura(foto: dict) -> dict:
         "bbox": bbox,
         "procesada": foto["procesada"],
         "nota": foto["nota"],
+        "propietario": foto.get("propietario"),
     }
 
 
