@@ -11,6 +11,8 @@ archivo, así que esto funciona distinto que con Google Drive:
 - La sesión se abre con pyicloud, con una cuenta de Apple que agregó la
   carpeta compartida a su iCloud Drive. La primera vez, y cuando Apple deja
   de confiar en la sesión (unos 30 días), pide un código de verificación.
+- Si Apple pide código o rechaza la contraseña, la API no vuelve a intentar
+  sola: cada intento manda otro SMS o acerca a Apple a bloquear la cuenta.
 - La carpeta se lee por CloudKit y no por el servicio Drive de pyicloud: su
   descarga (docws download/by_id) da 404 con carpetas que compartió otra
   cuenta. CloudKit, además, devuelve solo lo que cambió desde la vez
@@ -64,7 +66,7 @@ CODIGOS_SESION_VENCIDA = {"401", "421", "450"}
 # pyicloud lee y escribe aquí su sesión; Postgres guarda una copia
 DIR_SESION = Path(tempfile.gettempdir()) / "alpr-icloud"
 
-_estado: dict = {"ultimo_escaneo": None, "ultimo_error": None, "ultima_revision": 0.0}
+_estado: dict = {"ultimo_escaneo": None, "ultimo_error": None, "ultima_revision": 0.0, "rechazada": False}
 _carpeta: dict | None = None
 _api: PyiCloudService | None = None
 # El cliente al que Apple le pidió código; POST /icloud/codigo lo completa
@@ -88,6 +90,10 @@ class IcloudError(RuntimeError):
 
 class FaltaCodigo(IcloudError):
     """Apple pide el código de verificación y la API no entra hasta tenerlo."""
+
+
+class CredencialesRechazadas(IcloudError):
+    """Apple rechazó el correo o la contraseña; no se reintenta solo."""
 
 
 class SinCodigoPendiente(IcloudError):
@@ -165,7 +171,11 @@ def _entrar() -> PyiCloudService:
     except PyiCloudAcceptTermsException as e:
         raise IcloudError("Apple pide aceptar sus términos: entra una vez a icloud.com con esa cuenta") from e
     except PyiCloudFailedLoginException as e:
-        raise IcloudError(f"Apple rechazó ICLOUD_APPLE_ID o ICLOUD_PASSWORD ({e})") from e
+        # Cada intento fallido acerca a Apple a bloquear la cuenta: no se repite
+        # solo. La marca vive en memoria porque al corregir las variables
+        # Render reinicia la API, y ese reinicio es el que debe reintentar.
+        _estado["rechazada"] = True
+        raise CredencialesRechazadas(f"Apple rechazó ICLOUD_APPLE_ID o ICLOUD_PASSWORD ({e})") from e
     if api.requires_2fa:
         if api.security_key_names:
             raise IcloudError("la cuenta usa llaves de seguridad; usa una que reciba el código por SMS o en un dispositivo")
@@ -180,6 +190,11 @@ def _cliente() -> PyiCloudService:
     global _api
     with _lock_icloud:
         if _api is None:
+            if _estado["rechazada"]:
+                raise CredencialesRechazadas(
+                    "Apple rechazó ICLOUD_APPLE_ID o ICLOUD_PASSWORD: corrígelos en Render"
+                    " o reintenta con POST /icloud/sesion"
+                )
             if db.leer("falta_codigo"):
                 raise FaltaCodigo("falta el código de verificación de Apple: pídelo con POST /icloud/sesion")
             _restaurar_sesion()
@@ -190,13 +205,15 @@ def _cliente() -> PyiCloudService:
 
 
 def iniciar_sesion() -> str:
-    """POST /icloud/sesion: entra de nuevo, aunque la vez anterior faltara el código.
+    """POST /icloud/sesion: entra de nuevo, aunque la vez anterior faltara el
+    código o Apple rechazara la contraseña.
 
     Devuelve "activa", o "falta_codigo" si Apple mandó un código.
     """
     global _api, _esperando_codigo
     with _lock_icloud:
         _api = _esperando_codigo = None
+        _estado["rechazada"] = False
         db.guardar("falta_codigo", None)
         try:
             _cliente()
@@ -456,7 +473,7 @@ def escanear_sin_excepciones() -> None:
     """Para tareas de fondo, donde una excepción solo ensuciaría el log."""
     try:
         escanear()
-    except FaltaCodigo as e:
+    except (FaltaCodigo, CredencialesRechazadas) as e:
         log.warning("iCloud: %s", e)
     except Exception:
         log.exception("Falló el escaneo de la carpeta de iCloud")
@@ -511,9 +528,13 @@ def recorte_de(id_: str) -> bytes | None:
 
 
 def estado() -> dict:
+    if _api is not None:
+        sesion = "activa"
+    else:
+        sesion = "rechazada" if _estado["rechazada"] else "sin_iniciar"
     datos = {
         "carpeta": None,
-        "sesion": "activa" if _api is not None else "sin_iniciar",
+        "sesion": sesion,
         "ultimo_escaneo": _estado["ultimo_escaneo"],
         "ultimo_error": _estado["ultimo_error"],
         "fotos": None,
@@ -524,7 +545,7 @@ def estado() -> dict:
     except Exception as e:
         datos["ultimo_error"] = datos["ultimo_error"] or _describir(e)
     try:
-        if _api is None and (_esperando_codigo is not None or db.leer("falta_codigo")):
+        if sesion == "sin_iniciar" and (_esperando_codigo is not None or db.leer("falta_codigo")):
             datos["sesion"] = "falta_codigo"
         datos.update(db.contar())
     except Exception as e:

@@ -74,6 +74,7 @@ EstadoLectura = Literal[
 Sesion = Literal[
     "activa",        # hay sesión y Apple confía en ella
     "falta_codigo",  # Apple pidió el código de verificación: POST /icloud/codigo
+    "rechazada",     # Apple rechazó ICLOUD_APPLE_ID o ICLOUD_PASSWORD; no se reintenta solo
     "sin_iniciar",   # todavía no se intentó entrar (la API recién arrancó)
 ]
 

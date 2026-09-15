@@ -90,6 +90,12 @@ class Settings(BaseSettings):
         m = re.search(r"/iclouddrive/([A-Za-z0-9_-]+)", valor)
         return m.group(1) if m else valor.strip()
 
+    @field_validator("icloud_apple_id", "icloud_password")
+    @classmethod
+    def _sin_espacios(cls, valor: str) -> str:
+        """Quita los espacios que se cuelan al pegar en el panel de Render."""
+        return valor.strip()
+
     @property
     def groq_activo(self) -> bool:
         """Groq solo se usa si está habilitado Y hay API key."""
