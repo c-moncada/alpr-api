@@ -277,6 +277,22 @@ pasos, el código ya no sirve: pide otro con el paso 1.
 Cuando la sesión vence, la API lo intenta una vez sola y Apple te manda un
 código: si te llega, pásalo directo al paso 2. Después ya no lo intenta por
 su cuenta, porque cada intento es otro SMS: espera a que llames al paso 1.
+Igual si Apple rechaza la contraseña (`"sesion": "rechazada"`): no reintenta
+hasta que corrijas las variables (al guardar, Render reinicia la API) o
+llames al paso 1, porque cada intento fallido acerca a Apple a bloquear la
+cuenta.
+
+**Desde tu PC**, sin depender de que Render siga despierto entre los dos
+pasos:
+
+```bash
+python scripts/subir_sesion_icloud.py --apple-id cuenta-de-la-api@icloud.com
+```
+
+Te pide la contraseña y el código en la terminal (o reusa una sesión de
+confianza que ya esté en tu PC) y guarda la sesión en Postgres. Necesita la
+misma `DATABASE_URL` de Render: si no está en tu `.env`, te la pide. Después
+llama `POST /icloud/sesion`.
 
 ### Cómo se mantiene al día
 
@@ -428,6 +444,7 @@ alpr_api/
 │   └── main.py            Endpoints FastAPI
 ├── scripts/
 │   ├── precargar_modelos.py   Descarga los ONNX (lo usa el Dockerfile)
+│   ├── subir_sesion_icloud.py Abre la sesión de iCloud en tu PC y la guarda en Postgres
 │   └── test_alpr.py           Corre el pipeline sin HTTP, para medir precisión
 ├── Dockerfile
 ├── render.yaml            Blueprint de Render
@@ -448,7 +465,8 @@ alpr_api/
 | Error de CORS en el navegador | Tu dominio no está en `CORS_ORIGENES`. |
 | `/icloud/estado` dice `falta_codigo` | Apple pidió el código (la primera vez o cada ~30 días). Ver [El código de Apple](#el-código-de-apple). |
 | `409` en `POST /icloud/codigo` | La API se reinició entre los dos pasos y el código ya no sirve. Pide otro con `POST /icloud/sesion`. |
-| `ultimo_error`: Apple rechazó `ICLOUD_APPLE_ID` o `ICLOUD_PASSWORD` | Revisa el correo y la contraseña. Tiene que ser la de la cuenta: Apple no acepta contraseñas de app. |
+| `/icloud/estado` dice `"sesion": "rechazada"` | Apple rechazó `ICLOUD_APPLE_ID` o `ICLOUD_PASSWORD`. Tiene que ser la contraseña de la cuenta de Apple, no la del correo (y no una contraseña de app). La API no reintenta sola: corrige las variables en Render o llama `POST /icloud/sesion`. |
+| Apple dice que no puede enviar códigos a ese número | Apple limita los SMS por número; espera unas horas y pide el código una sola vez. Si en tu PC hay una sesión de confianza de la cuenta, `scripts/subir_sesion_icloud.py` la sube sin código. |
 | `503` "no se pudo usar Postgres" | `DATABASE_URL` está mal o la base no responde. |
 | Una foto nueva tarda en salir | Render gratis estaba dormido. Ver [Cómo se mantiene al día](#cómo-se-mantiene-al-día). |
 

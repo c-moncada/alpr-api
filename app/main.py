@@ -269,7 +269,7 @@ def icloud_estado() -> IcloudEstadoResponse:
 
 @app.post("/icloud/sesion", response_model=SesionResponse, tags=["icloud"], dependencies=_deps_icloud)
 def icloud_sesion(tareas: BackgroundTasks) -> SesionResponse:
-    """Entra a iCloud con la cuenta configurada. Úsalo cuando `/icloud/estado` diga `falta_codigo`.
+    """Entra a iCloud con la cuenta configurada. Úsalo cuando `/icloud/estado` diga `falta_codigo` o `rechazada`.
 
     Si Apple pide verificación, manda un código a los dispositivos de la
     cuenta o por SMS: pásalo a `POST /icloud/codigo`.
