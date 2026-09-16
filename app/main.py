@@ -71,6 +71,7 @@ from app.models import (
     PropietariosResponse,
     SesionResponse,
 )
+from app.nombre_archivo import velocidad_kmh
 
 logging.basicConfig(
     level=logging.INFO,
@@ -196,6 +197,8 @@ def detect(
     es la de mayor confianza. El recorte es un JPEG en base64: en un navegador
     se muestra con `<img src="data:image/jpeg;base64,{imagen_base64}">`. Si la
     placa está registrada en `/propietarios`, `propietario` trae los datos del dueño.
+    `velocidad_kmh` sale del nombre del archivo que pone la cámara
+    (`..._003-5kmh.jpg` = 3.5); es None si el nombre no la trae.
     """
     limite = int(settings.max_mb_imagen * 1024 * 1024)
     contenido = archivo.file.read(limite + 1)
@@ -213,7 +216,11 @@ def detect(
 
     placas, ms = alpr_service.procesar_frame(frame)
     duenos = _propietarios([p["texto"] for p in placas if p["texto"]])
-    return DetectResponse(placas=[_a_placa(p, duenos.get(p["texto"])) for p in placas], ms_procesamiento=ms)
+    return DetectResponse(
+        placas=[_a_placa(p, duenos.get(p["texto"])) for p in placas],
+        velocidad_kmh=velocidad_kmh(archivo.filename),
+        ms_procesamiento=ms,
+    )
 
 
 # -------------------------------------------------------------- iCloud Drive

@@ -49,6 +49,7 @@ from pyicloud.exceptions import (
 
 from app import alpr_service, db
 from app.config import settings
+from app.nombre_archivo import velocidad_kmh
 
 log = logging.getLogger("alpr.icloud")
 
@@ -488,6 +489,7 @@ def _a_lectura(foto: dict) -> dict:
     return {
         "id": foto["id"],
         "nombre": foto["nombre"],
+        "velocidad_kmh": velocidad_kmh(foto["nombre"]),
         "subida": foto["subida"],
         "estado": foto["estado"],
         "placa": foto["placa"],
