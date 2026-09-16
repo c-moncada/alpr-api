@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     #      argentinian-plates-cnn-model
     ocr_model: str = "cct-s-v2-global-model"
     # Umbral del detector: por debajo de esto no se considera placa
-    detector_conf_thresh: float = 0.4
+    detector_conf_thresh: float = 0.25
     # cpu | cuda | auto
     ocr_device: str = "cpu"
     # Placas chicas o lejanas: el detector reduce la foto a 512 px y una placa

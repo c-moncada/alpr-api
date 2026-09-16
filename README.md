@@ -533,7 +533,7 @@ alpr_api/
 |---|---|
 | `401` en `/detect` | Falta `X-API-Key`. En Render, el valor está en **Environment → API_KEY**. |
 | La primera petición en Render tarda ~1 min | El plan gratis se durmió. No es un error. |
-| `placas: []` en fotos buenas | La placa está muy pequeña o muy en ángulo. Revisa que `MOSAICOS` no esté en `nunca` y baja `MOSAICO_TAMANO` a 320; si sigue, sube a `yolo-v9-s-608-...` o baja `DETECTOR_CONF_THRESH` a 0.25. |
+| `placas: []` en fotos buenas | La placa está muy pequeña o muy en ángulo. Revisa que `MOSAICOS` no esté en `nunca` y baja `MOSAICO_TAMANO` a 320; si sigue, sube a `yolo-v9-s-608-...` o baja `DETECTOR_CONF_THRESH` (default 0.25) a 0.15. |
 | Lee la placa con un carácter mal | Sube a `OCR_MODEL=global-plates-mobile-vit-v2-model`. Si el error es sistemático con placas hondureñas, toca fine-tuning. |
 | El servicio se reinicia solo en Render | Probablemente se quedó sin RAM (512 MB en el plan gratis). Vuelve a los modelos default o baja `MAX_MB_IMAGEN`. |
 | Error de CORS en el navegador | Tu dominio no está en `CORS_ORIGENES`. |
