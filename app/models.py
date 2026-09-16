@@ -56,6 +56,9 @@ class DetectResponse(BaseModel):
         ...,
         description="Vacía si no se encontró ninguna placa. Ordenada de más a menos confianza del detector.",
     )
+    velocidad_kmh: float | None = Field(
+        None, description="Velocidad que la cámara escribió en el nombre del archivo (ej. ..._003-5kmh.jpg = 3.5)"
+    )
     ms_procesamiento: float
 
 
@@ -95,6 +98,7 @@ class Lectura(BaseModel):
 
     id: str = Field(..., description="ID de la foto en iCloud; sirve para pedir el recorte")
     nombre: str
+    velocidad_kmh: float | None = Field(None, description="Velocidad que la cámara escribió en el nombre de la foto")
     subida: datetime = Field(..., description="Cuándo se subió la foto a iCloud")
     estado: EstadoLectura
     placa: str | None = Field(None, description="Texto de la placa más clara de la foto")

@@ -61,6 +61,7 @@ Respuesta:
       "nota_fallback": null
     }
   ],
+  "velocidad_kmh": 3.5,
   "ms_procesamiento": 57.38
 }
 ```
@@ -72,6 +73,10 @@ Respuesta:
 - **`imagen_base64`** es el recorte de la placa en JPEG.
 - **`propietario`** trae los datos del dueño si la placa está registrada (ver
   [Dueños de las placas](#dueños-de-las-placas)); si no, `null`.
+- **`velocidad_kmh`** sale del nombre del archivo que pone la cámara:
+  `2026-09-16_15-38-17-681_003-5kmh.jpg` es 3.5 km/h. Es `null` si el nombre
+  no trae velocidad, así que manda la foto con su nombre original. Las
+  lecturas de iCloud (`/icloud/lecturas`) traen el mismo campo.
 - **`confianza_ocr`** es la del carácter **más débil**, no el promedio (ver
   [Configuración](#configuración)).
 

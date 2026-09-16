@@ -147,7 +147,8 @@ $("enviar").addEventListener("click", async () => {
     }
 
     mostrar(datos);
-    estado(`Listo en ${segundos} s (procesamiento en el servidor: ${datos.ms_procesamiento} ms).`);
+    const velocidad = datos.velocidad_kmh != null ? ` Velocidad: ${datos.velocidad_kmh} km/h.` : "";
+    estado(`Listo en ${segundos} s (procesamiento en el servidor: ${datos.ms_procesamiento} ms).${velocidad}`);
   } catch (e) {
     estado(`No se pudo conectar con ${url}. Revisa la URL. (${e.message})`, true);
   } finally {
