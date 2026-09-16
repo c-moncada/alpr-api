@@ -433,6 +433,24 @@ mentiría y el mínimo no.
 | detector | `yolo-v9-t-256-...` | `yolo-v9-t-512-...` | `yolo-v9-s-608-...` |
 | OCR | `cct-xs-v2-global-model` | `cct-s-v2-global-model` | `global-plates-mobile-vit-v2-model` |
 
+**`MOSAICOS`** (default `si_no_detecta`) — placas chicas o lejanas. El
+detector reduce la foto a 512 px: en una foto 1080p, una placa de 130 px le
+llega de ~35 px y no la ve. Cuando la foto completa no da ninguna placa, el
+detector corre otra vez sobre recortes solapados de `MOSAICO_TAMANO` px
+(default 400, con solape `MOSAICO_SOLAPE` de 0.4). Así la placa le llega más
+grande que en la foto original. Se descartan las cajas cuadradas (falsos
+positivos en paredes o pisos lisos) y las cortadas por el borde de un mosaico.
+
+| valor | cuándo usa mosaicos | costo en 1080p |
+|---|---|---|
+| `si_no_detecta` | solo si la foto completa no encontró nada | ~30 ms con placa, ~0.7 s sin placa (CPU local) |
+| `siempre` | siempre; encuentra una placa chica junto a una grande | ~0.7 s siempre |
+| `nunca` | nunca | ~30 ms |
+
+El solape en píxeles (`0.4 × 400 = 160`) tiene que ser mayor que el ancho de
+la placa más grande que se busca; si no, puede quedar partida entre mosaicos.
+Un `MOSAICO_TAMANO` más chico detecta placas más pequeñas, pero hace más pasadas.
+
 Otras: `MAX_MB_IMAGEN` (default 10), `MARGEN_RECORTE` (12 px de contexto
 alrededor de la placa en el recorte), `API_KEY` y `CORS_ORIGENES`. Todas están
 documentadas en `.env.example`.
@@ -510,7 +528,7 @@ alpr_api/
 |---|---|
 | `401` en `/detect` | Falta `X-API-Key`. En Render, el valor está en **Environment → API_KEY**. |
 | La primera petición en Render tarda ~1 min | El plan gratis se durmió. No es un error. |
-| `placas: []` en fotos buenas | La placa está muy pequeña o muy en ángulo. Sube a `yolo-v9-s-608-...` o baja `DETECTOR_CONF_THRESH` a 0.25. |
+| `placas: []` en fotos buenas | La placa está muy pequeña o muy en ángulo. Revisa que `MOSAICOS` no esté en `nunca` y baja `MOSAICO_TAMANO` a 320; si sigue, sube a `yolo-v9-s-608-...` o baja `DETECTOR_CONF_THRESH` a 0.25. |
 | Lee la placa con un carácter mal | Sube a `OCR_MODEL=global-plates-mobile-vit-v2-model`. Si el error es sistemático con placas hondureñas, toca fine-tuning. |
 | El servicio se reinicia solo en Render | Probablemente se quedó sin RAM (512 MB en el plan gratis). Vuelve a los modelos default o baja `MAX_MB_IMAGEN`. |
 | Error de CORS en el navegador | Tu dominio no está en `CORS_ORIGENES`. |

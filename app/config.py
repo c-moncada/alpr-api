@@ -36,6 +36,28 @@ class Settings(BaseSettings):
     detector_conf_thresh: float = 0.4
     # cpu | cuda | auto
     ocr_device: str = "cpu"
+    # Placas chicas o lejanas: el detector reduce la foto a 512 px y una placa
+    # de 130 px en una foto 1080p le llega de ~35 px, así que no la ve. Los
+    # mosaicos corren el detector sobre recortes solapados de la foto.
+    #   si_no_detecta: solo cuando la foto completa no encontró nada (default)
+    #   siempre: también cuando ya hay placas (encuentra una chica junto a una grande)
+    #   nunca: una sola pasada, lo más rápido
+    mosaicos: str = "si_no_detecta"
+    # Lado del mosaico en píxeles de la foto original. Una placa de 130 px se
+    # detecta con 400 y no con 640. Más chico = placas más pequeñas, más pasadas.
+    mosaico_tamano: int = 400
+    # Fracción de solape entre mosaicos vecinos. Los píxeles de solape
+    # (0.4 × 400 = 160) tienen que superar el ancho de la placa más grande que
+    # se busca, o puede quedar partida entre dos mosaicos.
+    mosaico_solape: float = 0.4
+
+    @field_validator("mosaicos")
+    @classmethod
+    def _modo_mosaicos(cls, valor: str) -> str:
+        valor = valor.strip().lower()
+        if valor not in ("si_no_detecta", "siempre", "nunca"):
+            raise ValueError("MOSAICOS tiene que ser si_no_detecta, siempre o nunca")
+        return valor
 
     # -------------------------------------------------------------- decisiones
     # Si la confianza del OCR local baja de esto, se intenta el fallback.
